@@ -11,24 +11,25 @@ import itertools
 from pytz import timezone
 
 from airflow import DAG
-from airflow.hooks.S3_hook import S3Hook
+#from airflow.hooks.S3_hook import S3Hook
+from airflow.hooks.postgres_hook import PostgresHook
 from airflow.operators.python_operator import PythonOperator
 from airflow.exceptions import AirflowException
 from airflow.models import Variable
 
 logger = logging.getLogger(__name__)
-LOCAL_TZ = timezone('Australia/Sydney')
+LOCAL_TZ = timezone('Europe/London')
 utc = timezone('UTC')
 today = dt.datetime.now().replace(tzinfo=utc).astimezone(LOCAL_TZ)
 yesterday = today - dt.timedelta(days=1)
-LAST_SAVE_DATE = datetime.strptime(Variable.get("dag_start_date"), '%Y-%m-%d')
+LAST_SAVE_DATE = datetime.strptime(Variable.get("dag_start_date_time"), '%Y-%m-%d %H:%M:%S')
 
 args = {
-    'owner': 'singhg4n',
+    'owner': 'voa_user',
     'depends_on_past': False,
     'catchup': False,
     'start_date': LAST_SAVE_DATE,
-    'email': ['xxx@yyy.com'],
+    'email': ['ozgur.gul@hpe.com'],
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 0,
@@ -42,33 +43,59 @@ dag_config = Variable.get("app_web_module_conversion_config", deserialize_json=T
 
 
 def get_last_modified_definitions(**context):
-    s3 = boto3.resource('s3')
+    #s3 = boto3.resource('s3')
+    iv = pyscopg2.connect('iv_evitem')
+    
     previous_execution_date = context.get('prev_ds')
     bucket = s3.Bucket(Variable.get("sanitization_s3_sanit_def_files_folder").split('/')[0])
-    list_modified_templates = []
+    
+    list_modified_transcripts = []
 
-    for file in itertools.chain(bucket.objects.filter(Prefix=dag_config['definition_config']),
+    for row in itertools.chain(bucket.objects.filter(Prefix=dag_config['definition_config']),
                                 bucket.objects.filter(Prefix=dag_config['parquet_definition_config']
                                                       )):
-        if file.last_modified.strftime('%Y%m%d') >= previous_execution_date:
-            list_modified_templates.append(file.key)
+        if row.last_modified.strftime('%Y%m%d') >= previous_execution_date:
+            list_modified_transcripts.append(row.key)
 
-    context['task_instance'].xcom_push(key='recently_updated_templates',
-                                       value=list_modified_templates)
+    context['task_instance'].xcom_push(key='recently_updated_transcripts',
+                                       value=list_modified_transcripts)
 
 
 def remove_create_dag(**context):
-    s3 = S3Hook(aws_conn_id='s3_etl')
-    airflow_dags_directory = context['conf'].get('core', 'dags_folder')
-    list_definition_keys = context['task_instance'].xcom_pull(
-        task_ids='get_last_modified_definitions', key='recently_updated_templates')
+    #s3 = S3Hook(aws_conn_id='s3_etl')
+    
+    execution_date = context.get('execution_date').strftime('%Y-%m-%d')
+    query = """
+            SELECT *
+            FROM users
+            WHERE created_at::date = date '{}'
+    """.format(execution_date)
 
-    if list_definition_keys:
-        for definition_key in list_definition_keys:
+    src_conn = PostgresHook(postgres_conn_id='source',
+                            schema='source_schema').get_conn()
+    dest_conn = PostgresHook(postgres_conn_id='dest',
+                             schema='dest_schema').get_conn()
+
+    # notice this time we are naming the cursor for the origin table
+    # that's going to force the library to create a server cursor
+    src_cursor = src_conn.cursor("serverCursor")
+    src_cursor.execute(query)
+    dest_cursor = dest_conn.cursor()
+
+
+    
+    
+    airflow_dags_directory = context['conf'].get('core', 'dags_folder')
+    
+    list_transcript_keys = context['task_instance'].xcom_pull(
+        task_ids='get_last_modified_transcripts', key='recently_updated_transcripts')
+
+    if list_transcript_keys:
+        for transcript_key in list_transcript_keys:
             key_json = json.loads(s3.read_key(
                 bucket_name=Variable.get("sanitization_s3_sanit_def_files_folder").split('/')[0],
                 key=definition_key))
-            logger.info(definition_key + 'Definition file is loaded successfully')
+            logger.info(transcript_key + 'Transcript record is loaded successfully')
 
             landing_file_name = os.path.join(key_json.get('dag_folder'),
                                              key_json.get('dag_id') + ".py")
@@ -80,7 +107,7 @@ def remove_create_dag(**context):
                 logger.info('DAG file is removed')
 
             try:
-                with open(key_json.get('template_location_in_ec2'), 'r') as template_content:
+                with open(key_json.get('template_location_in_server'), 'r') as template_content:
                     content = template_content.read().replace('___DAG_ID___', key_json.get(
                         'dag_id'))
                     content = content.replace('___SCHEDULE_INTERVAL___', key_json.get(
@@ -90,24 +117,24 @@ def remove_create_dag(**context):
                     content = content.replace('___SCHEMA___', key_json.get('schema'))
 
             except Exception as e:
-                raise AirflowException('Cannot open {template_ec2}'.format(
-                    template_ec2=key_json.get('template_location_in_ec2')))
+                raise AirflowException('Cannot open {template_server}'.format(
+                    template_server=key_json.get('template_location_in_server')))
 
             with open(landing_file_name, 'w') as dag_file:
                 dag_file.write(content)
 
             os.symlink(landing_file_name, dag_file_name)
             logger.info('DAG file is symbolic linked to the dag folder for definition' +
-                        definition_key)
+                        transcription_key)
     else:
-        logger.warning('No definition file was updated in s3!!Exiting...')
+        logger.warning('No transcription file was updated in server!!Exiting...')
 
 
 with DAG(PARENT_DAG_NAME, default_args=args, schedule_interval=None) as main_dag:
     doc_md = __doc__
 
     get_last_modified_templates_task = PythonOperator(
-        task_id='get_last_modified_definitions',
+        task_id='get_last_modified_transcripts',
         python_callable=get_last_modified_definitions,
         provide_context=True,
         retries=3
