@@ -1,13 +1,13 @@
 {
 "query": "truncate {schema}.{table_name}; insert into {schema}.{table_name} ( with e as ( select *, convert_timezone( 'UTC', 'Australia/Sydney', collector_tstamp ) as best_tstamp from atomic.events where collector_tstamp >= convert_timezone( 'Australia/Sydney', 'UTC', '{from_date}' ) AND collector_tstamp < convert_timezone( 'Australia/Sydney', 'UTC', '{to_date}' ) ), module_views as ( select * from e join atomic.au_net_xxx_snowplow_collection_context_1 c on e.event_id = c.root_id and e.collector_tstamp = c.root_tstamp where e.event = 'struct' and e.se_category = 'collection' and e.se_action = 'view' ), conversions as ( select * from e join au_net_xxx_snowplow_link_referrer_1 lr on e.event_id = lr.root_id and e.collector_tstamp = lr.root_tstamp ), user_conversions as ( select date(m.best_tstamp) as batch_date, m.user_id as user_id, case when m.v_tracker like 'ios-%' then 'iOS' when m.v_tracker like 'andr-%' then 'android' else 'unknown' end as os, m.app_id as app_id, m.moduleid as moduleid, m.modulelabel as modulelabel, count(distinct m.event_id) view_events, count(distinct c.event_id) conversion_events from module_views m left join conversions c on c.user_id = m.user_id and m.moduleid = c.moduleid and c.modulecontext = m.modulecontext and c.collector_tstamp between m.collector_tstamp group by 1, 2, 3, 4, 5, 6, 7, 8 ) select * from user_conversions );",
-"schema": "modules",
-"table_name": "app_modules_daily_users",
+"schema": "voa",
+"table_name": "va_app_modules_daily_transcripts",
 "table_columns": "batch_date,user_id,os,app_id,moduleid,modulelabel,view_events,conversion_events",
-"start_date": "2019-07-01",
-"back_date_from": "2019-08-01",
+"start_date": "2020-05-21",
+"back_date_from": "2020-05-25",
 "batch_size": "15",
-"template_location_in_ec2": "/home/airflow/airflow-dags-sanitization/templates/dag_template.py",
+"template_location_in_server": "/home/airflow/airflow-dags-sanitization/templates/dag_template.py",
 "dag_folder": "/home/airflow/airflow-dags-sanitization/dags_generated/",
-"dag_id": "app_modules_daily_users",
-"schedule_interval": "30 19 * * *"
+"dag_id": "app_modules_daily_transcripts",
+"schedule_interval": "*/15 * * * *"
 }
