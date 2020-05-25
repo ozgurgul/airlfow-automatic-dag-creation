@@ -2,12 +2,12 @@
 import sys
 
 sys.path.insert(0, "/home/airflow/airflow/plugins/")
-sys.path.insert(0, "/opt/datascience/airflow-dags-social/plugins/")
+sys.path.insert(0, "/va/airflow-dags-social/plugins/")
 
 from datetime import datetime, timedelta
 
 import os
-import boto3
+#import boto3
 import logging
 import pandas as pd
 import json
@@ -20,7 +20,7 @@ from airflow.hooks.S3_hook import S3Hook
 from airflow.hooks.postgres_hook import PostgresHook
 from airflow.operators.python_operator import PythonOperator
 from airflow.operators.python_operator import BranchPythonOperator
-from s3_list_operator import S3ListOperator
+#from s3_list_operator import S3ListOperator
 from abc_redshift_operator import ABCRedshiftOperator
 from s3_to_redshift_operator import S3ToRedshiftTransfer
 from abc_redshift_to_s3_operator import ABCRedshiftToS3Transfer
