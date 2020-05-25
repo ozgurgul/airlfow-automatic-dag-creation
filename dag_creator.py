@@ -5,17 +5,19 @@ import os
 import logging
 import json
 import datetime as dt
-import boto3
-import itertools
+#import boto3
+#import itertools
 
 from pytz import timezone
 
 from airflow import DAG
-#from airflow.hooks.S3_hook import S3Hook
 from airflow.hooks.postgres_hook import PostgresHook
 from airflow.operators.python_operator import PythonOperator
 from airflow.exceptions import AirflowException
 from airflow.models import Variable
+
+from datetime import datetime, timedelta
+from psycopg2.extras import execute_values
 
 logger = logging.getLogger(__name__)
 LOCAL_TZ = timezone('Europe/London')
@@ -43,19 +45,40 @@ dag_config = Variable.get("app_web_module_conversion_config", deserialize_json=T
 
 
 def get_last_modified_definitions(**context):
-    #s3 = boto3.resource('s3')
-    iv = pyscopg2.connect('iv_evitem')
     
-    previous_execution_date = context.get('prev_ds')
-    bucket = s3.Bucket(Variable.get("sanitization_s3_sanit_def_files_folder").split('/')[0])
+    previous_execution_date = context.get('prev_ds')    
+    query = """
+            SELECT *
+            FROM voa.iv_evitem
+            WHERE insert_time::date >= date '{}'
+            AND insert_time::date < date '{}'
+    """.format(previous_execution_date, today.strftime('%Y-%m-%d %H:%S:%M')) # .strftime('%Y-%m-%d')
+
+    src_conn = PostgresHook(postgres_conn_id='source',
+                            schema='source_schema').get_conn()
+
+    # notice this time we are naming the cursor for the origin table
+    # that's going to force the library to create a server cursor
+    src_cursor = src_conn.cursor("serverCursor")
+    src_cursor.execute(query)
+    
+        # now we need to iterate over the cursor to get the records in batches
+    while True:
+        records = src_cursor.fetchmany(size=2000)
+        if not records:
+            break
+       
+
+    src_cursor.close()
+    
+    
+    #bucket = s3.Bucket(Variable.get("sanitization_s3_sanit_def_files_folder").split('/')[0])
     
     list_modified_transcripts = []
 
-    for row in itertools.chain(bucket.objects.filter(Prefix=dag_config['definition_config']),
-                                bucket.objects.filter(Prefix=dag_config['parquet_definition_config']
-                                                      )):
-        if row.last_modified.strftime('%Y%m%d') >= previous_execution_date:
-            list_modified_transcripts.append(row.key)
+    for row in records:
+        if row.insert_time.strftime('%Y%m%d %H:%M:%S') >= previous_execution_date:
+            list_modified_transcripts.append(row.uid)
 
     context['task_instance'].xcom_push(key='recently_updated_transcripts',
                                        value=list_modified_transcripts)
@@ -67,7 +90,7 @@ def remove_create_dag(**context):
     execution_date = context.get('execution_date').strftime('%Y-%m-%d')
     query = """
             SELECT *
-            FROM users
+            FROM voa.va_stg_voice
             WHERE created_at::date = date '{}'
     """.format(execution_date)
 
@@ -133,9 +156,9 @@ def remove_create_dag(**context):
 with DAG(PARENT_DAG_NAME, default_args=args, schedule_interval=None) as main_dag:
     doc_md = __doc__
 
-    get_last_modified_templates_task = PythonOperator(
+    get_last_modified_transcript_task = PythonOperator(
         task_id='get_last_modified_transcripts',
-        python_callable=get_last_modified_definitions,
+        python_callable=get_last_modified_transcripts,
         provide_context=True,
         retries=3
     )
@@ -147,4 +170,4 @@ with DAG(PARENT_DAG_NAME, default_args=args, schedule_interval=None) as main_dag
         retries=3
     )
 
-    get_last_modified_templates_task >> remove_create_dag_task
+    get_last_modified_transcripts_task >> remove_create_dag_task
