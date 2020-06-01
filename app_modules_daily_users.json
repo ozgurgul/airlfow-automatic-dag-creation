@@ -9,5 +9,6 @@
 "template_location_in_ec2": "/home/airflow/airflow-dags-sanitization/templates/dag_template.py",
 "dag_folder": "/home/airflow/airflow-dags-sanitization/dags_generated/",
 "dag_id": "app_modules_daily_users",
-"schedule_interval": "30 19 * * *"
+"schedule_interval": "30 19 * * *",
+"module_conversion_look_back_days": "2"  
 }
